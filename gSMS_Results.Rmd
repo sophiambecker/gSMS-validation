@@ -1,0 +1,1241 @@
+---
+title: "gSMS Calibration Analysis"
+author: "Sophia Becker"
+date: "`r Sys.Date()`"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+```
+
+
+Throughout, bolded figure labels correspond to figures in the paper, "Field testing of gamma-ray spectroscopy method for soil water content estimation in an agricultural field". Required csv files for this code are located in the folder, "CsvFiles". 
+
+```{r set up data, include = FALSE}
+# load libraries
+library(dplyr) # select(), sample_n()
+library(ggplot2) 
+library(egg) # ggarrange()
+library(scales) # number_format()
+library(knitr) # kable()
+library(rtop) # sceua()
+#library(stats) # lm(), predict.lm()
+
+# create output directory/file system
+
+stamp <- Sys.Date()
+mainDir <- getwd()
+outDir <- file.path(mainDir, paste0("Output", stamp))
+if (!dir.exists(outDir)){
+  dir.create(outDir)
+}else{
+  print("dir exists")
+}
+
+getwd()
+```
+
+
+```{r load data, results=FALSE, echo=FALSE}
+
+#############################LOAD DATA#########################################
+# Load Data
+
+timeseries <- read.csv(paste0(mainDir,"\\CsvFiles\\CombinedTimeSeries.csv"))
+
+timeseries$Date<- as.Date(timeseries$Date)
+
+colnames(timeseries)[11]<- "Precip.mm" #rename
+
+veg <- read.csv(paste0(mainDir, "\\CsvFiles\\CalibrationDataVeg.csv"))
+
+k40 <- read.csv(paste0(mainDir, "\\CsvFiles\\CalibrationDataK40.csv"))
+
+grav_swc <- read.csv(paste0(mainDir, "\\CsvFiles\\V_Wt_AvgPore.csv"))
+
+SOC_Latt <- read.csv(paste0(mainDir, "\\CsvFiles\\SOCandLatticeValues.csv"))
+
+# Gravimetric Sample dates in DOY:
+
+SampleDOY21 <- c(217,
+                 231,
+                 246,
+                 260,
+                 288,
+                 302,
+                 316,
+                 337)
+SampleDOY22 <- c(84,
+                 105,
+                 138,
+                 147,
+                 215,
+                 229,
+                 243,
+                 260, 
+                 278, 
+                 295)
+
+SampleDOY23 <- c(135, 
+                159, 
+                172,
+                191, 
+                205,
+                221,
+                240,
+                264,
+                296)
+
+SampleDates21 <- as.Date(SampleDOY21-1, origin = "2021-01-01")
+SampleDates22 <- as.Date(SampleDOY22-1, origin = "2022-01-01")
+SampleDates23 <- as.Date(SampleDOY23-1, origin = "2023-01-01")
+
+# Cbind the gravimetric samples and veg and K40
+
+Sampledf <- cbind(grav_swc, veg, k40)
+Sampledf <- Sampledf[,-6] # remove extra x column
+
+Sampledf <- Sampledf %>% dplyr::select(Date, Year, DOY, V_Wt_Avg..g.g., SD..g.g., SE..g.g., TotBWE, BWEsd, Ht, ht_sd, K, sd)
+
+# Calculate Total water and add to Sampledf
+# Let Wtot be the total water
+
+Wsoc <- SOC_Latt[2,2] # soil organic water content (g/g) 
+Wsoc_uncer <- SOC_Latt[2,2] # uncertainty due to instrument detection limits
+
+Wl <- SOC_Latt[1,2] # lattice water content
+Wl_uncer <- SOC_Latt[1,3] # uncertainty due to instrument detection limits
+
+SampWtot <- Sampledf$V_Wt_Avg..g.g. + Wl + Wsoc # add lattice and SOC water
+SampWtot_se <- sqrt((Sampledf$SE..g.g.)^2 +Wl_uncer^2+Wsoc_uncer^2) # uncertainty analysis for sum of 3 variables
+
+# add Wtot to calibration data frame
+Sampledf$DepthWtWtot <- SampWtot
+Sampledf$DepthWtWtot_se <- SampWtot_se
+
+SampledfBare <- Sampledf[17:18,]
+
+```
+
+## Parameter set up
+
+```{r parameter set up}
+# Parameters
+mu.g <- 0.05257 # mass attentuation coefficient of soil (silica) cm^2/g
+mu.w <- 0.05835 # mass attentuation coefficient of water cm^2/g
+
+bweslope <- -0.012 # Baldoncini et al., 2019
+
+minIo <- max(timeseries$K40)
+maxIo <- 1.5*minIo
+min.mu.g <- mu.g/2
+max.mu.g <- 2* mu.g
+minBWEslope <- -0.5
+maxBWEslope <- 0
+
+# preliminary solve for Io using the two bare soil gravimetric samples
+
+Io <- (SampledfBare$DepthWtWtot*(mu.w/mu.g)+1)*SampledfBare$K
+
+avgIo <- mean(Io)
+
+# simplified data frame for fitting model parameters
+data <- data.frame(It = Sampledf$K, BWE = Sampledf$TotBWE, y = Sampledf$DepthWtWtot)
+
+write.csv(data, file = paste0(outDir, "\\TotalWaterDataframe", stamp,".csv"))
+```
+
+## Calibration Equation
+
+The calibration equation tested is:
+
+$$\theta_{tot} = (\frac {I_{0}*f(BWE)}{I_{t}}-1)* \frac {(\frac {\mu}{\rho})_{s}}{(\frac {\mu}{\rho})_{w}}$$
+
+where $$f(BWE)= b*BWE + 1.$$ $BWE$ is biomass water equivalence in mm and $b$ is the slope of the biomass water correction factor. The biomass correction factor , $f(BWE)$, is from [Baldoncini et al., 2019](https://doi.org/10.1016/j.geoderma.2018.08.012).
+
+$\theta_{tot}$ is the total water content in $g$ $g^{-1}$(sum of gravimetric pore water, lattice water, and SOC water), $I_{0}$ is the K-40 concentration in dry soil, $I_{t}$ is the K-40 concentration at measurement time, $(\frac {\mu}{\rho})_{s}$ is the mass attenuation coefficient of the soil ($cm^2 g^{-1}$), and $(\frac {\mu}{\rho})_{w}$ is the mass attenuation coefficient of water ($cm^2 g^{-1}$).The equation is coded below:
+
+```{r set up calibration equation}
+calEq <- function(It, BWE, b = bweslope, Io, mg, mw = mu.w)
+  (((((Io *(b*BWE+1))/It)-1)*mg/mw))
+```
+
+## Fitting Calibration Equation
+
+The main calibration equations under consideration are Eq. 1 and Eq. 2, but Eq. 1b and 2b are also included in the code. Eq. 1b and Eq. 2b fit the slope of the biomass correction factor for comparison with the value from Baldoncini et al., 2019. 
+
+```{r table of fiting options, echo = FALSE}
+
+Parameters <- c("Io", "a", "BWE correction factor slope" )
+
+Fit0 <- c("Yes", "NA", "NA")
+Fit1 <- c("Yes", "NA", "No")
+Fit1b <- c("Yes", "NA", "Yes")
+Fit2 <- c("Yes", "Yes", "No")
+Fit2b <- c("Yes", "Yes", "Yes")
+
+ModelFit <- c("Eq. 0","Eq. 1", "Eq. 1b", "Eq. 2", "Eq. 2b")
+
+FitDescr <- rbind(Fit0, Fit1, Fit1b, Fit2, Fit2b)
+colnames(FitDescr) <- Parameters
+rownames(FitDescr) <- ModelFit
+
+kable(FitDescr, format = "simple", caption = "**Table 1.** Calibration equations and the parameters fit within each.")
+
+
+```
+
+The function, [sceua](https://rdrr.io/rforge/rtop/man/sceua.html) (within the rtop package) uses the shuffled complex evolution algorithm for robust and simultaneous parameter estimation. 
+Below is an example of how the sceua function is used. 
+
+```{r estimate parameters with sceua, results = FALSE}
+# write calibration function in terms of parameter vector
+
+#Independent variables are x1 and x2.
+# x1 = It 
+# x2 = BWE
+# Parameters to be fit are contained in the vector, pars
+# pars  = c(Io, mu.g, bweslope)
+
+CalEq <- function(x1, x2, pars)
+  (((((pars[1] *(pars[3]*x2+1))/x1)-1)*pars[2]/mu.w))
+
+# write objective function, sum of absolute value of residuals
+OFUN <- function(pars, x1, x2, yobs){
+  yvals = CalEq(x1, x2, pars)
+  sum(abs(yvals-yobs))
+}
+
+# use sceua function to find all three parameters
+
+sceuares <- sceua(OFUN, pars = c(avgIo, mu.g, bweslope), lower = c(minIo, min.mu.g, minBWEslope), 
+                  upper = c(maxIo, max.mu.g, maxBWEslope),
+                  x1 = data$It, x2 = data$BWE, yobs = data$y)
+
+```
+The parameters found are `r round(sceuares$par[1],2)`, `r round(sceuares$par[2],2)`,and `r round(sceuares$par[3],2)` for $I_{0}$, $(\frac {\mu}{\rho})_{s}$, and $b$, respectively. 
+
+```{r Function to calculate error statistics, include = FALSE}
+
+# Function to summarize the n test predictions
+
+# LOOCVdf is the df of squared error/residuals for each of the test predictions created by the for loop
+# Obs is the observed response variable (gravimetric water content)
+
+ErrorStat <- function(LOOCVdf, Obs){
+  rmse <- sqrt(mean(LOOCVdf[,1])) # df column of squared errors/residuals
+  SSE <- sum(LOOCVdf[,1])
+  SStot <- sum((Obs - mean(Obs))^2)
+  rsq <- 1-SSE/SStot
+  adj.rsq <- 1- ((1-rsq)*(num.obs-1)/(num.obs-num.pred-1))
+  LOOCV.sum.stats <- data.frame(RMSE = rmse, Rsq = rsq, AdjRsq = adj.rsq, Io = mean(LOOCVdf[,2]))
+  return(LOOCV.sum.stats)
+}
+
+```
+
+## First, evaluate  the most basic calibration equation
+
+"Equation 0" fits $I_{0}$ without a biomass correction factor and uses the 1.46 MeV $SiO_{2}$ literature value for$(\frac {\mu}{\rho})_{s}/(\frac {\mu}{\rho})_{w}$. Below is an example of the code that was used to fit parameters for each of the models in Table 1. The summary statistics are calculated from the squared error for each of the 27 leave-one-out cross-validation test values. 
+
+```{r fit Io with no biomass correction factor, results=FALSE}
+
+# do LOOCV for calEqfit0 (fitting Io with no biomass correction factor)
+
+# write calibration function in terms of parameter vector
+
+# x1 = It
+# x2 = BWE
+# pars  = c(Io)
+
+CalEq_0 <- function(x1, x2, pars)
+  (((((pars[1] *((0*x2)+1))/x1)-1)*mu.g/mu.w))
+  
+# write objective function, sum of absolute value of residuals
+OFUN <- function(pars, x1, x2, yobs){
+  yvals = CalEq_0(x1, x2, pars)
+  sum(abs(yvals-yobs))
+}
+
+num.obs <- nrow(data)-1 # number of observations used in each of the LOOCV predictions
+num.pred <- 2 # number of variables + fit parameters
+
+Model0_LOOCV <- data.frame(matrix(ncol = 4, nrow = nrow(data)))
+colnames(Model0_LOOCV)<- c("SqErr for Test value", "Io", "mu_g", "BWE slope")
+
+# use a for loop to perform leave-one-out cross-validation
+# in each iteration, all but one sample is used to fit the equation with sceua, and 
+# then the fitted parameters are used to predict the water content of the left-out sample
+
+set.seed(3)
+
+for (i in 1:nrow(data)){
+  # use sceua function to find all three parameters
+  sceuares <- sceua(OFUN, pars = c(avgIo), lower = c(minIo), 
+                  upper = c(maxIo),
+                  x1 = data$It[-i], x2 = data$BWE[-i], yobs = data$y[-i])
+  
+  pred1 <- CalEq_0(x1 = data$It[i], x2 = data$BWE[i], pars = sceuares$par)
+  resid <- pred1 - data$y[i]
+  sqerr <- resid^2
+  
+  results <- data.frame(SqErr = sqerr, Io = sceuares$par[1], mu_g = mu.g, BWEslope = 0)
+  Model0_LOOCV[i,]<- results
+}
+
+# calculate summary statistics
+
+rmse <- sqrt(mean(Model0_LOOCV[,1])) # df column of squared errors/residuals
+SSE <- sum(Model0_LOOCV[,1])
+SStot <- sum((data$y - mean(data$y))^2)
+rsq <- 1-SSE/SStot
+adj.rsq <- 1- ((1-rsq)*(num.obs-1)/(num.obs-num.pred-1))
+LOOCV.sum.stats0 <- data.frame(RMSE = rmse, Rsq = rsq, AdjRsq = adj.rsq, 
+                               Io = mean(Model0_LOOCV$Io),
+                               BWE_slope = "NA", a = "NA")
+
+pred0 <- CalEq_0(x1 = data$It, x2 = data$BWE, pars= c(Model0_LOOCV$Io))
+
+resid0 <- data$y - pred0 # observed - predicted
+
+Predresid0 <- ggplot()+
+  geom_point(aes(x = pred0, y = resid0))+
+  geom_hline(yintercept = 0)+
+  labs(x = bquote('Predicted Total water ' (g ~g^-1)), y = "Residual",
+       caption = "Residuals vs. predicted values for Equation 0 (no biomass correction factor)")
+
+Predresid0
+
+# find the linear relationship between the residuals and K40
+
+# K40
+newk40 <- seq(500, 700, 1)
+Klm <- lm(resid0 ~ K, data = Sampledf)
+summKlm <- summary(Klm)
+resKpred <- predict.lm(Klm, newdata = data.frame(K = newk40))
+
+Kresid0rgr <- ggplot()+
+  geom_point(aes(x = Sampledf$K,y = resid0))+
+  geom_line(aes(y = resKpred, x = newk40), color = "red")+
+  geom_hline(yintercept = 0)+
+  ylim(c(-0.12, 0.12))+
+  xlim(c(520, 680))+
+  labs(x = NULL, y = bquote('Residual ' (g ~g^-1)), caption = "Residuals vs. K-40 for Equation 0 (no biomass correction factor)")
+
+Kresid0rgr
+
+
+```
+
+
+```{r Model0 tables, echo = FALSE}
+#kable(Model0_LOOCV, digits = 3, format = "simple", caption = "LOOCV results using sceau optimization function for Model 0.")
+
+kable(LOOCV.sum.stats0, digits = 3, format = "simple", caption = "Summary statistics and average fit parameters from LOOCV for Model 0.")
+
+```
+
+
+```{r CI for model 0, include= FALSE}
+
+# Find use one standard deviation for uncertainty in K40:
+
+#K40_uncer <- 12.42057 # see file "C:/Users/sbecker14/Documents/GRScalibration/GRScalibrationanalysis/CaculateK40CountUncertainty20230725.R"
+
+Kx <- seq(500,700,1)
+plotcurve <- CalEq_0(x1 = Kx, x2 = 0, pars = c(LOOCV.sum.stats0$Io))
+
+# Create plot with 95% CI
+
+# write correct OFUN function
+
+# rewrite objective function, sum of absolute value of residuals
+OFUN <- function(pars, x1, x2, yobs){
+  yvals = CalEq_0(x1, x2, pars)
+  sum(abs(yvals-yobs))
+}
+
+# define number of bootstraps and prediction matrix
+
+nboot <- 500
+bspreds0 <- matrix(nrow = nboot, ncol = length(Kx))
+
+# Write for loop for bootstrapping
+for (b in 1:nboot){
+ bsxy <- sample_n(data, size = nrow(data), replace = TRUE)
+ sceuares <- sceua(OFUN, pars = c(avgIo), lower = c(minIo), 
+                  upper = c(maxIo),
+                  x1 = bsxy$It, x2 = bsxy$BWE, yobs = bsxy$y)
+ bspreds0[b,] <- CalEq_0(x1 = Kx, x2 = 0, pars = sceuares$par)
+  
+}
+
+#matplot(t(bspreds0), type = "l")
+
+# then calculate quantiles for each column from bootstrap prediction
+# calculate the 2.5% and 97.5% quantiles for find the 95% confidence interval
+
+bsquant0 <- apply(bspreds0, MARGIN = 2, FUN = quantile, probs = c(0.025, 0.975))
+
+```
+
+
+```{r sample data plot, echo = FALSE}
+GravimetricDataPlotCI <- ggplot()+
+  geom_ribbon(aes(x = Kx, ymin = bsquant0[1,], ymax = bsquant0[2,]), fill = "gray", alpha = 0.5)+
+  geom_errorbar(data = Sampledf, aes(x = K, ymin = DepthWtWtot-(2*DepthWtWtot_se), 
+                                         ymax = DepthWtWtot+(2*DepthWtWtot_se)), width = 3)+
+  geom_errorbarh(data = Sampledf, aes(xmin =K-sd, 
+                                          xmax = K+sd,
+                                          y = DepthWtWtot), height = 0.003)+
+  geom_point(data = Sampledf, aes(x = K, y = DepthWtWtot, 
+                                      shape = "Sample with vertical \n error bars = two S.E. \n in total water; \n horizontal error bars \n = one S.D. in K-40 ",
+                                  fill = TotBWE), 
+             color = "black",size = 2)+
+  geom_line(aes(x = Kx , y = plotcurve, color = "Base model fitting \n only I_0 with \n 95% CI"), size = 1)+
+  
+  scale_x_continuous(labels = number_format(accuracy = 1.0), limits = c(500,700))+
+  scale_y_continuous(limits = c(0.07, 0.54))+
+  scale_shape_manual(breaks = c("Sample with vertical \n error bars = two S.E. \n in total water; \n horizontal error bars \n = one S.D. in K-40 "), 
+                     values = c(24))+
+  scale_fill_viridis_b(option = "D", begin = 0, end = 0.9,limits = range(Sampledf$TotBWE))+
+  scale_color_manual(values = c("black", "gray1"), breaks = c("Base model fitting \n only I_0 with \n 95% CI", "95% CI"))+
+  labs( y = expression(theta[g]~+~theta[lattice]~+~theta[SOC]~(g~g^-1)), 
+        x = bquote('K-40 ' (Bq ~kg^-1)),
+       shape = "", fill = "BWE (mm)", color = "")+
+  theme(axis.title.x = element_text(size = 6), 
+        plot.title = element_text(size = 10), axis.title.y = element_text(size = 8), 
+        legend.key.size = unit(0.1, "in"), legend.text = element_text(size = 2))+
+  theme_classic()
+
+GravimetricDataPlotCI
+
+ggsave(GravimetricDataPlotCI, filename = paste0(outDir, "\\GravimetricDataPlotCI", stamp, ".tiff"), width = 6, height = 4, dpi = 300)
+
+```
+
+**Figure 4.** The experimental relationship between total water and K-40 compared to the relationship predicted by Eq. 0 (black line) and the corresponding 95% confidence interval.
+
+## Next, Evaluate Calibration Equation 1
+
+The calibration equation is $\theta_{tot} = (\frac {I_{0}*f(BWE)}{I_{t}}-1)* \frac {(\frac {\mu}{\rho})_{s}}{(\frac {\mu}{\rho})_{w}}.$ Calibration Eq. 1 uses the BWE correction factor and mass attenuation coefficients from the literature to fit $I_{0}$ parameter in the calibration equation, using the 27 observations. 
+
+```{r LOOCV for Eq. 1, include = FALSE}
+
+# write calibration function in terms of parameter vector
+
+# x1 = It
+# x2 = BWE
+# pars  = c(Io)
+
+CalEq_1 <- function(x1, x2, pars)
+  (((((pars[1] *(bweslope*x2+1))/x1)-1)*mu.g/mu.w))
+
+# write objective function, sum of absolute value of residuals
+OFUN <- function(pars, x1, x2, yobs){
+  yvals = CalEq_1(x1, x2, pars)
+  sum(abs(yvals-yobs))
+}
+
+num.obs <- nrow(data) -1
+num.pred <- 2 +1 
+
+Model1_LOOCV <- data.frame(matrix(ncol = 4, nrow = nrow(data)))
+colnames(Model1_LOOCV)<- c("SqErr for Test value", "Io", "mu_g", "BWE slope")
+
+# use a for loop to perform leave-one-out cross-validation
+# in each iteration, all but one sample is used to fit the equation with sceua, and 
+# then the fitted parameters are used to predict the water content of the left-out sample
+
+set.seed(3)
+
+for (i in 1:nrow(data)){
+  # use sceua function to find parameter(s)
+  sceuares <- sceua(OFUN, pars = c(avgIo), lower = c(minIo), 
+                  upper = c(maxIo),
+                  x1 = data$It[-i], x2 = data$BWE[-i], yobs = data$y[-i])
+  
+  pred1 <- CalEq_1(x1 = data$It[i], x2 = data$BWE[i], pars = sceuares$par)
+  resid <- pred1 - data$y[i] # difference between predicted and observed for the left-out sample
+  sqerr <- resid^2
+  
+  results <- data.frame(SqErr = sqerr, Io = sceuares$par[1], mu_g = mu.g, BWEslope = bweslope)
+  Model1_LOOCV[i,]<- results
+}
+
+# calculate summary statistics
+
+rmse <- sqrt(mean(Model1_LOOCV[,1])) # df column of squared errors/residuals
+SSE <- sum(Model1_LOOCV[,1]) # Sum of squared errors
+SStot <- sum((data$y - mean(data$y))^2) # Total sum of squared error
+rsq <- 1-SSE/SStot
+adj.rsq <- 1- ((1-rsq)*(num.obs-1)/(num.obs-num.pred-1))
+LOOCV.sum.statsEq1 <- data.frame(RMSE = rmse, Rsq = rsq, AdjRsq = adj.rsq, 
+                               Io = mean(Model1_LOOCV$Io),
+                               BWE_slope = mean(Model1_LOOCV$`BWE slope`), a = "NA")
+write.csv(Model1_LOOCV, file = paste0(outDir, "\\LOOCVResults_Eq1", stamp, ".csv"))
+write.csv(LOOCV.sum.statsEq1, file = paste0(outDir, "\\SummaryLOOCVResults_Eq1", stamp, ".csv"))
+
+```
+
+
+```{r Model A tables, echo = FALSE}
+
+kable(LOOCV.sum.statsEq1, digits = 3, format = "simple", caption = "Summary statistics and average fit parameters from LOOCV for calibration Eq. 1.")
+
+# use the average Io value:
+IoAvgFit <- LOOCV.sum.statsEq1[1,4]
+
+```
+
+
+```{r Eq. 1 residual plots, echo = FALSE}
+
+# Calibration equation 1 #### Io is only fit value #######################################
+
+predA <- calEq(It = data$It, BWE = data$BWE, Io = IoAvgFit, b = bweslope, mg = mu.g, mw = mu.w)
+
+residA <- data$y - predA # observed - predicted
+
+# Plot the residuals against different variables
+
+PredresidA <- ggplot()+
+  geom_point(aes(x = predA,y = residA))+
+  geom_hline(yintercept = 0)+
+  labs(x = bquote('Predicted Total water ' (g ~g^-1)), y = "Residual")
+
+KresidA <- ggplot()+
+  geom_point(aes(x = Sampledf$K,y = residA))+
+  geom_hline(yintercept = 0)+
+  labs(x = bquote('K-40 ' (Bq ~kg^-1)), y = NULL)
+
+BWEresidA <- ggplot()+
+  geom_point(aes(x = Sampledf$TotBWE, y = residA))+
+  geom_hline(yintercept = 0)+
+  labs(x = "BWE (mm)", y = NULL)
+
+HeightresidA <- ggplot()+
+  geom_point(aes(x = Sampledf$Ht,y = residA))+
+  geom_hline(yintercept = 0)+
+  labs(x = "Vegetation height (cm)", y = "Residual")
+
+DOYresidA <- ggplot()+
+  geom_point(aes(x = Sampledf$DOY, y  = residA))+
+  geom_hline(yintercept = 0)+
+  labs(x = "DOY", y = NULL)
+
+combinedA <- ggarrange(plots = list(PredresidA, KresidA, BWEresidA, HeightresidA, DOYresidA), nrow =2, ncol = 3)
+
+ggsave(plot = combinedA, paste0(outDir, "\\CombinedResidualPlots_modelA.tiff"), dpi = 400, width = 8, height = 5)
+```
+
+Residuals of Eq. 1 compared to predicted total water, K-40, biomass water equivalence (BWE), vegetation height, and day of year (DOY). 
+
+```{r Eq.1 residual distribution, echo = FALSE}
+
+#Look at the distribution of the residuals
+ggplot()+
+  geom_histogram(aes(x = residA), fill = "lightblue4", bins = 10)+
+  geom_vline(xintercept = mean(residA), col = "red")+
+  labs(x = bquote('Residual total water ' (g ~g^-1)), y = "Frequency")+
+  annotate(geom = "text", x = 0.05, y = 5, label = paste0("Mean = ", round(mean(residA), digits = 3)))
+```
+
+Distribution of Eq. 1 residuals, with mean shown by red vertical line. 
+
+```{r linear fit to Eq. 1 residuals, echo = FALSE}
+##### Model A Residual linear regressions ########################################
+Sampledf$residA <- residA
+
+# find the linear relationship between the residuals and each of the variables,K-40 and BWE
+
+# K40
+newk40 <- seq(500, 700, 1)
+Klm <- lm(residA ~ K, data = Sampledf)
+summKlm <- summary(Klm)
+resKpred <- predict.lm(Klm, newdata = data.frame(K = newk40))
+
+KregrA <- ggplot()+
+  geom_point(aes(x = Sampledf$K,y = residA))+
+  geom_line(aes(y = resKpred, x = newk40), color = "red")+
+  geom_hline(yintercept = 0)+
+  ylim(c(-0.12, 0.12))+
+  xlim(c(520, 680))+
+  labs(x = NULL, y = bquote('Residual ' (g ~g^-1)), title = "a)")+
+  annotate(geom = "text", x = 620, y = -0.08, size = 3, 
+           label = paste0("\n Intercept = ", round(summKlm$coefficients[1,1], 3),
+                          ", pval = ", round(summKlm$coefficients[1,4], 3), 
+                          "\n Slope = ",round(summKlm$coefficients[2,1], 3),", pval = ", 
+                          round(summKlm$coefficients[2,4], 3), "\n Adj R-sq = ",
+                          round(summKlm$adj.r.squared, 3)
+  ))
+
+KregrA_xlab <- ggplot()+
+  geom_point(aes(x = Sampledf$K,y = residA))+
+  geom_line(aes(y = resKpred, x = newk40), color = "red")+
+  geom_hline(yintercept = 0)+
+  ylim(c(-0.12, 0.12))+
+  xlim(c(520, 680))+
+  labs(x = bquote('K-40 '(Bq ~kg^-1)), y = bquote('Residual ' (g ~g^-1)), 
+       caption = "Linear fit between Eq. 1 residuals and K-40 shown by red line.")+
+  annotate(geom = "text", x = 620, y = -0.08, size = 3, 
+           label = paste0("\n Intercept = ", round(summKlm$coefficients[1,1], 3),
+                          ", pval = ", round(summKlm$coefficients[1,4], 3), 
+                          "\n Slope = ",round(summKlm$coefficients[2,1], 3),", pval = ", 
+                          round(summKlm$coefficients[2,4], 3), "\n Adj R-sq = ",
+                          round(summKlm$adj.r.squared, 3)
+  ))
+# BWE
+
+newbwe <- seq(0, 6, 0.1)
+bwelm <- lm(residA ~ TotBWE, data = Sampledf)
+summbwelm <- summary(bwelm)
+resbwepred <- predict.lm(bwelm, newdata = data.frame(TotBWE = newbwe))
+
+BWEregrA <- ggplot()+
+  geom_point(aes(x = Sampledf$TotBWE,y = residA))+
+  geom_line(aes(y = resbwepred, x = newbwe), color = "red")+
+  geom_hline(yintercept = 0)+
+  labs(x = "BWE (mm)", y = bquote('Residual ' (g ~g^-1)),
+       caption = "Linear fit between Eq. 1 residuals and BWE shown by red line.")+
+  ylim(c(-0.12, 0.12))+
+  annotate(geom = "text", x = 2, y = -0.08, size = 3, 
+           label = paste0("\n Intercept = ",round(summbwelm$coefficients[1,1], 3),
+                          ", pval = ", round(summbwelm$coefficients[1,4], 3),
+                          "\n Slope = ",round(summbwelm$coefficients[2,1], 3),
+                          ", pval = ", round(summbwelm$coefficients[2,4], 3),
+                          "\n Adj R-sq = ", round(summbwelm$adj.r.squared, 3)
+  ))
+
+# combine into a summary figure: 
+combineRegressionsA <- ggarrange(plots = list(KregrA_xlab, BWEregrA), ncol = 1, nrow = 2)
+
+# Export plot of K alone:
+ggsave(plot = KregrA_xlab, filename = paste0(outDir, "\\LinearRegressionForResidualsvsK40_ModelA.tiff"), width = 6, height = 4, dpi = 300)
+
+```
+
+## Evaluate Calibrationi Equation 1b
+
+Calibration Equation 1, $\theta_{tot} = (\frac {I_{0}*f(BWE)}{I_{t}}-1)* \frac {(\frac {\mu}{\rho})_{s}}{(\frac {\mu}{\rho})_{w}}$,
+is used to fit $I_{0}$ and the slope for the biomass correction factor to the data simultaneously. 
+
+```{r Equation 1b, include= FALSE}
+
+# write calibration function in terms of parameter vector
+
+# x1 = It
+# x2 = BWE
+# pars  = c(Io, b)
+
+CalEq_1b <- function(x1, x2, pars)
+   (((((pars[1] *(pars[2]*x2+1))/x1)-1)*(mu.g/mu.w)))
+
+  
+# write objective function, sum of absolute value of residuals
+OFUN <- function(pars, x1, x2, yobs){
+  yvals = CalEq_1b(x1, x2, pars)
+  sum(abs(yvals-yobs))
+}
+
+num.obs <- nrow(data)-1
+num.pred <- 2 +2
+
+Model1b_LOOCV <- data.frame(matrix(ncol = 3, nrow = nrow(data)))
+colnames(Model1b_LOOCV)<- c("SqErr for Test value", "Io", "b")
+
+# use a for loop to perform leave-one-out cross-validation
+# in each iteration, all but one sample is used to fit the equation with sceua, and 
+# then the fitted parameters are used to predict the water content of the left-out sample
+
+set.seed(3)
+
+for (i in 1:nrow(data)){
+  # use sceua function to find all three parameters
+  sceuares <- sceua(OFUN, pars = c(avgIo,  bweslope), lower = c(minIo, minBWEslope), 
+                  upper = c(maxIo, maxBWEslope),
+                  x1 = data$It[-i], x2 = data$BWE[-i], yobs = data$y[-i])
+  
+  pred1 <- CalEq_1b(x1 = data$It[i], x2 = data$BWE[i], pars = sceuares$par)
+  resid <- pred1 - data$y[i] # difference between predicted and observed for the left-out sample
+  sqerr <- resid^2
+  
+  results <- data.frame(SqErr = sqerr, Io = sceuares$par[1], b = sceuares$par[2])
+  Model1b_LOOCV[i,]<- results
+}
+
+# calculate summary statistics
+
+rmse <- sqrt(mean(Model1b_LOOCV[,1])) # df column of squared errors/residuals
+SSE <- sum(Model1b_LOOCV[,1]) # Sum of squared errors
+SStot <- sum((data$y - mean(data$y))^2) # Total sum of squared error
+rsq <- 1-SSE/SStot
+adj.rsq <- 1- ((1-rsq)*(num.obs-1)/(num.obs-num.pred-1))
+LOOCV.sum.statsEq1b <- data.frame(RMSE = rmse, Rsq = rsq, AdjRsq = adj.rsq, 
+                               Io = mean(Model1b_LOOCV$Io),
+                               BWE_slope = mean(Model1b_LOOCV$b), a = "NA")
+
+# save results from LOOCV
+write.csv(Model1b_LOOCV, file = paste0(outDir, "\\LOOCVResults_Eq1b", stamp, ".csv"))
+write.csv(LOOCV.sum.statsEq1b, file = paste0(outDir, "\\SummaryLOOCVResults_Eq1b", stamp, ".csv"))
+
+```
+
+
+```{r Eq 1b Tables, echo = FALSE}
+
+#kable(Model1b_LOOCV, digits = 5, format = "simple", caption = "LOOCV results using sceau optimization function for Eq. 1b.")
+
+kable(LOOCV.sum.statsEq1b, digits = 4, format = "simple", caption = "Summary statistics and average fit parameters from LOOCV for Eq. 1b.")
+
+pred1b <- CalEq_1b(x1 = data$It, x2 = data$BWE, pars = as.numeric(c(LOOCV.sum.statsEq1b[4], LOOCV.sum.statsEq1b[5] )))
+
+resid1b <- data$y - pred1b # observed - predicted
+
+Klm1b <- lm(resid1b ~ K, data = Sampledf)
+summKlm1b <- summary(Klm1b)
+resKpred1b <- predict.lm(Klm1b, newdata = data.frame(K = newk40))
+
+Kregr1b <- ggplot()+
+  geom_point(aes(x = Sampledf$K,y = resid1b))+
+  geom_line(aes(y = resKpred1b, x = newk40), color = "red")+
+  geom_hline(yintercept = 0)+
+  ylim(c(-0.12, 0.12))+
+  xlim(c(520, 680))+
+  labs(x = bquote('K-40 '(Bq ~kg^-1)), y = bquote('Residual ' (g ~g^-1)),
+       caption = "Linear fit between Eq. 1b residuals and BWE shown by red line.")+
+  annotate(geom = "text", x = 620, y = -0.08, size = 3, label = paste0("\n Intercept = ", round(summKlm1b$coefficients[1,1], 3),", pval = ", round(summKlm1b$coefficients[1,4], 3),
+                                                            "\n Slope = ",round(summKlm1b$coefficients[2,1], 3),", pval = ", round(summKlm1b$coefficients[2,4], 3),
+                                                            "\n Adj R-sq = ", round(summKlm1b$adj.r.squared, 3)
+  ))
+
+Kregr1b
+
+ggsave(Kregr1b, filename = paste0(outDir, "\\ResidualPlotEq1b_annotated", stamp, ".tiff"), dpi= 400, width = 6, height = 4)
+
+
+```
+
+## Evaluate Calibration Equation 2
+
+The calibration equation is $$\theta_{tot} = (\frac {I_{0}*f(BWE)}{I_{t}}-1)* \frac {(\frac {\mu}{\rho})_{s}}{(\frac {\mu}{\rho})_{w}}*a.$$ In Calibration Eq. 2, $I_{0}$ and $a$, the correction factor parameter for the ratio between the soil and water mass attenuation coefficients, are fit simultaneously. 
+
+
+```{r Calibration Equation 2, include= FALSE}
+
+# write calibration function in terms of parameter vector
+
+# x1 = It
+# x2 = BWE
+# pars  = c(Io, a)
+
+min.a <- 0.1
+max.a <- 1
+a.start <- 0.85
+
+CalEq_2 <- function(x1, x2, pars)
+   (((((pars[1] *(bweslope*x2+1))/x1)-1)*(mu.g/mu.w)*pars[2]))
+  
+# write objective function, sum of absolute value of residuals
+OFUN <- function(pars, x1, x2, yobs){
+  yvals = CalEq_2(x1, x2, pars)
+  sum(abs(yvals-yobs))
+}
+
+num.obs <- nrow(data)-1
+num.pred <- 2 +2
+
+Model2_LOOCV <- data.frame(matrix(ncol = 3, nrow = nrow(data)))
+colnames(Model2_LOOCV)<- c("SqErr for Test value", "Io", "a")
+
+# use a for loop to perform leave-one-out cross-validation
+# in each iteration, all but one sample is used to fit the equation with sceua, and 
+# then the fitted parameters are used to predict the water content of the left-out sample
+
+set.seed(3)
+
+for (i in 1:nrow(data)){
+  #sbs <- (1:nrow(data))[-i] # subset
+  # use sceua function to find all three parameters
+  sceuares <- sceua(OFUN, pars = c(avgIo, a.start), lower = c(minIo, min.a), 
+                  upper = c(maxIo, max.a),
+                  x1 = data$It[-i], x2 = data$BWE[-i], yobs = data$y[-i])
+  
+  pred1 <- CalEq_2(x1 = data$It[i], x2 = data$BWE[i], pars = sceuares$par)
+  resid <- pred1 - data$y[i] # difference between predicted and observed for the left-out sample
+  sqerr <- resid^2
+  
+  results <- data.frame(SqErr = sqerr, Io = sceuares$par[1], a = sceuares$par[2])
+  Model2_LOOCV[i,]<- results
+}
+
+
+
+# calculate summary statistics
+
+rmse <- sqrt(mean(Model2_LOOCV[,1])) # df column of squared errors/residuals
+SSE <- sum(Model2_LOOCV[,1]) # Sum of squared errors
+SStot <- sum((data$y - mean(data$y))^2) # Total sum of squared error
+rsq <- 1-SSE/SStot
+adj.rsq <- 1- ((1-rsq)*(num.obs-1)/(num.obs-num.pred-1))
+LOOCV.sum.statsEq2 <- data.frame(RMSE = rmse, Rsq = rsq, AdjRsq = adj.rsq, 
+                               Io = mean(Model2_LOOCV$Io),
+                               BWE_slope = bweslope, a = mean(Model2_LOOCV$a))
+write.csv(Model2_LOOCV, file = paste0(outDir, "\\LOOCVResults_Eq2", stamp, ".csv"))
+write.csv(LOOCV.sum.statsEq2, file = paste0(outDir, "\\SummaryLOOCVResults_Eq2", stamp, ".csv"))
+```
+
+
+```{r Eq 2 Tables, echo = FALSE}
+
+kable(LOOCV.sum.statsEq2, digits = 4, format = "simple", caption = "Summary statistics and average fit parameters from LOOCV for Calibration Equation 2.")
+
+pred2 <- CalEq_2(x1 = data$It, x2 = data$BWE, pars = as.numeric(c(LOOCV.sum.statsEq2[4], LOOCV.sum.statsEq2[6])))
+
+resid2 <- data$y - pred2 # observed - predicted 
+
+Klm2 <- lm(resid2 ~ K, data = Sampledf)
+summKlm2 <- summary(Klm2)
+resKpred2 <- predict.lm(Klm2, newdata = data.frame(K = newk40))
+
+Kregr2 <- ggplot()+
+  geom_point(aes(x = Sampledf$K,y = resid2))+
+  geom_line(aes(y = resKpred2, x = newk40), color = "red")+
+  geom_hline(yintercept = 0)+
+  ylim(c(-0.12, 0.12))+
+  xlim(c(520, 680))+
+  labs(x = bquote('K-40 '(Bq ~kg^-1)), y = bquote('Residual ' (g ~g^-1)), title = "b)")+
+  annotate(geom = "text", x = 620, y = -0.08, size = 3, label = paste0("\n Intercept = ", round(summKlm2$coefficients[1,1], 3),", pval = ", round(summKlm2$coefficients[1,4], 3),
+                                                            "\n Slope = ",round(summKlm2$coefficients[2,1], 3),", pval = ", round(summKlm2$coefficients[2,4], 3),
+                                                            "\n Adj R-sq = ", round(summKlm2$adj.r.squared, 3)
+  ))
+
+Kregr2
+
+ggsave(Kregr2, filename = paste0(outDir, "\\ResidualPlotEq2_annotated", stamp, ".tiff"), dpi= 400, width = 6, height = 4)
+
+```
+
+## Evaluate Calibration Equation 2b
+
+The calibration equation is $$\theta_{tot} = (\frac {I_{0}*f(BWE)}{I_{t}}-1)* \frac {(\frac {\mu}{\rho})_{s}}{(\frac {\mu}{\rho})_{w}}*a.$$ In Calibration Eq. 2b, $I_{0}$ and the correction factor parameter for the ratio between the soil and water mass attenuation coefficients, $a$, are fit simultaneously, along with the slope of the biomass correction factor. 
+
+```{r Equation 2b, include= FALSE}
+
+# write calibration function in terms of parameter vector
+
+# x1 = It
+# x2 = BWE
+# pars  = c(Io, a, b)
+
+min.a <- 0.1
+max.a <- 1
+a.start <- 0.85
+
+CalEq_2b <- function(x1, x2, pars)
+   (((((pars[1] *(pars[3]*x2+1))/x1)-1)*(mu.g/mu.w)*pars[2]))
+
+# write objective function, sum of absolute value of residuals
+OFUN <- function(pars, x1, x2, yobs){
+  yvals = CalEq_2b(x1, x2, pars)
+  sum(abs(yvals-yobs))
+}
+
+num.obs <- nrow(data)-1
+num.pred <- 2 +3
+
+Model2b_LOOCV <- data.frame(matrix(ncol = 4, nrow = nrow(data)))
+colnames(Model2b_LOOCV)<- c("SqErr for Test value", "Io", "a", "b")
+
+# use a for loop to perform leave-one-out cross-validation
+# in each iteration, all but one sample is used to fit the equation with sceua, and 
+# then the fitted parameters are used to predict the water content of the left-out sample
+
+set.seed(3)
+
+for (i in 1:nrow(data)){
+  #sbs <- (1:nrow(data))[-i] # subset
+  # use sceua function to find all three parameters
+  sceuares <- sceua(OFUN, pars = c(avgIo, a.start, bweslope), lower = c(minIo, min.a, minBWEslope), 
+                  upper = c(maxIo, max.a, maxBWEslope),
+                  x1 = data$It[-i], x2 = data$BWE[-i], yobs = data$y[-i])
+  
+  pred1 <- CalEq_2b(x1 = data$It[i], x2 = data$BWE[i], pars = sceuares$par)
+  resid <- pred1 - data$y[i] # difference between predicted and observed for the left-out sample
+  sqerr <- resid^2
+  
+  results <- data.frame(SqErr = sqerr, Io = sceuares$par[1], a = sceuares$par[2], b = sceuares$par[3])
+  Model2b_LOOCV[i,]<- results
+}
+
+# calculate summary statistics
+
+rmse <- sqrt(mean(Model2b_LOOCV[,1])) # df column of squared errors/residuals
+SSE <- sum(Model2b_LOOCV[,1]) # Sum of squared errors
+SStot <- sum((data$y - mean(data$y))^2) # Total sum of squared error
+rsq <- 1-SSE/SStot
+adj.rsq <- 1- ((1-rsq)*(num.obs-1)/(num.obs-num.pred-1))
+LOOCV.sum.statsEq2b <- data.frame(RMSE = rmse, Rsq = rsq, AdjRsq = adj.rsq, 
+                               Io = mean(Model2b_LOOCV$Io),
+                               BWE_slope = mean(Model2b_LOOCV$b), a = mean(Model2b_LOOCV$a))
+
+write.csv(Model2b_LOOCV, file = paste0(outDir, "\\LOOCVResults_Eq2b", stamp, ".csv"))
+write.csv(LOOCV.sum.statsEq2b, file = paste0(outDir, "\\SummaryLOOCVResults_Eq2b", stamp, ".csv"))
+
+```
+
+
+```{r Eq 2b Tables, echo = FALSE}
+
+kable(LOOCV.sum.statsEq2b, digits = 4, format = "simple", caption = "Summary statistics and average fit parameters from LOOCV for Eq. 2b, where Io, a, and BWE slope are fit to the data.")
+
+pred2b <- CalEq_2b(x1 = data$It, x2 = data$BWE, pars = as.numeric(c(LOOCV.sum.statsEq2b[4], LOOCV.sum.statsEq2b[6],LOOCV.sum.statsEq2b[5] )))
+
+resid2b <- data$y - pred2b # observed - predicted
+
+Klm2b <- lm(resid2b ~ K, data = Sampledf)
+summKlm2b <- summary(Klm2b)
+resKpred2b <- predict.lm(Klm2b, newdata = data.frame(K = newk40))
+
+Kregr2b <- ggplot()+
+  geom_point(aes(x = Sampledf$K,y = resid2b))+
+  geom_line(aes(y = resKpred2b, x = newk40), color = "red")+
+  geom_hline(yintercept = 0)+
+  ylim(c(-0.12, 0.12))+
+  xlim(c(520, 680))+
+  labs(x = bquote('K-40 '(Bq ~kg^-1)), y = bquote('Residual ' (g ~g^-1)),
+       caption = "Linear fit between Eq. 2b residuals and BWE shown by red line.")+
+  annotate(geom = "text", x = 620, y = -0.08, size = 3, label = paste0("\n Intercept = ", round(summKlm2b$coefficients[1,1], 3),", pval = ", round(summKlm2b$coefficients[1,4], 3),
+                                                            "\n Slope = ",round(summKlm2b$coefficients[2,1], 3),", pval = ", round(summKlm2b$coefficients[2,4], 3),
+                                                            "\n Adj R-sq = ", round(summKlm2b$adj.r.squared, 3)
+  ))
+
+Kregr2b
+
+ggsave(Kregr2b, filename = paste0(outDir, "\\ResidualPlotEq2b_annotated", stamp, ".tiff"), dpi= 400, width = 6, height = 4)
+
+```
+
+## Summary of model validations
+
+```{r summary of model validations, echo = FALSE}
+
+validSummary <- as.data.frame(rbind(LOOCV.sum.stats0, LOOCV.sum.statsEq1, LOOCV.sum.statsEq1b, LOOCV.sum.statsEq2, LOOCV.sum.statsEq2b))
+
+Equation <- c("0", "1", "1b", "2", "2b")
+
+validSummary <- cbind(Equation, validSummary)
+
+kable(validSummary, format = "simple", digits = 3, caption = "**Table 2.** The error statistics and average parameters found for each of the calibration equation variations. Recall -0.012 is the literature value for BWE slope.")
+
+```
+
+
+
+```{r time series calc and CI, include= FALSE}
+
+# add predictions for Eq. 1 and Eq. 2 to time series data frame
+timeseries$predA <- CalEq_1(x1 = timeseries$K40, x2 = timeseries$TotBWE, pars = c(LOOCV.sum.statsEq1$Io ))
+
+timeseries$predB<- CalEq_2(x1 = timeseries$K40, x2 = timeseries$TotBWE, pars = c(LOOCV.sum.statsEq2$Io, LOOCV.sum.statsEq2$a))
+
+## Calculate Confidence intervals with bootstrapping
+
+nboot <- 500
+
+# FOR MODEL A (eg. 1) ############################################################
+
+# write objective function, sum of absolute value of residuals
+OFUN <- function(pars, x1, x2, yobs){
+  yvals = CalEq_1(x1, x2, pars)
+  sum(abs(yvals-yobs))
+}
+
+bspredsA <- matrix(nrow = nboot, ncol = nrow(timeseries))
+
+# Write for loop for bootstrapping
+for (b in 1:nboot){
+  bsxy <- sample_n(data, size = nrow(data), replace = TRUE)
+  sceuares <- sceua(OFUN, pars = c(avgIo), lower = c(minIo), 
+                    upper = c(maxIo),
+                    x1 = bsxy$It, x2 = bsxy$BWE, yobs = bsxy$y)
+  bspredsA[b,] <- CalEq_1(x1 = timeseries$K40, x2 = timeseries$TotBWE,
+                          pars =sceuares$par)
+}
+
+bsquantA <- apply(bspredsA, MARGIN = 2, FUN = quantile, probs = c(0.025, 0.975))
+
+timeseries$ModA2.5 <- bsquantA[1,]
+timeseries$ModA97.5 <- bsquantA[2,]
+
+# FOR MODEL G (eq. 2) #####################################################
+# write objective function, sum of absolute value of residuals
+OFUN <- function(pars, x1, x2, yobs){
+  yvals = CalEq_2(x1, x2, pars)
+  sum(abs(yvals-yobs))
+}
+
+# define number of bootstraps and prediction matrix
+
+bspreds <- matrix(nrow = nboot, ncol = nrow(timeseries))
+
+# Write for loop for bootstrapping
+for (b in 1:nboot){
+ bsxy <- sample_n(data, size = nrow(data), replace = TRUE)
+ sceuares <- sceua(OFUN, pars = c(avgIo, a = a.start),
+                    lower = c(minIo, min.a), 
+                  upper = c(maxIo, max.a),
+                  x1 = bsxy$It, x2 = bsxy$BWE, yobs = bsxy$y)
+ bspreds[b,] <- CalEq_2(x1 = timeseries$K40, x2 = timeseries$TotBWE, pars = sceuares$par)
+  
+}
+
+# then calculate quantiles for each column from bootstrap prediction
+# calculate the 2.5% and 97.5% quantiles for find the 95% confidence interval
+
+bsquant <- apply(bspreds, MARGIN = 2, FUN = quantile, probs = c(0.025, 0.975))
+
+# add to timeseries dataframe
+
+timeseries$ModB2.5 <- bsquant[1,]
+timeseries$ModB97.5 <- bsquant[2,]
+
+```
+
+## 2021 Time Series figure
+
+```{r 2021 Time series figure, echo = FALSE}
+# set x limits to zoom in on periods with gravimetric data
+
+datebreaks21 <- seq(as.Date("2021-08-01"), as.Date("2021-12-10"), by = "4 weeks")
+coeff <- 990 # scaling factor for second y axis
+
+# lower panel of time series
+timeseries$TotBWE[91] <- timeseries$TotBWE[91] - 0.5 #fix interpolation error
+#timeseries$TotBWE[91] <- timeseries$TotBWE[91] + 0.5 #fix
+
+Veg <- ggplot(timeseries)+
+  #add vertical lines for sample dates
+  geom_vline(xintercept = as.Date(Sampledf$Date),linetype = 2)+
+  geom_line(aes(x = Date, y = TotBWE, color = "BWE"), linewidth = 1.5)+
+  geom_col(aes(x = Date, y = Precip.mm/4, fill = "Precip"))+
+  scale_y_continuous(
+    name = "BWE (mm)", 
+    sec.axis = sec_axis(~.*4, name = "Daily Precipitation (mm)"), limits = c(0, 15), breaks = seq(0, 16, 2))+
+  scale_x_date(breaks = datebreaks21, limits =c(as.Date("2021-08-01"), as.Date("2021-12-10")), date_labels = '%d %b' )+
+  scale_color_manual(breaks = c("BWE"), values = c("palegreen4"))+
+  scale_fill_manual(breaks = c("Precip"), values = c("skyblue3"))+
+  labs(color = " ", fill = " ", x = "2021")+
+  theme(axis.text.x = element_text( size = 6))+
+  theme_bw()+
+  theme(axis.text = element_text(colour = "black", size = 11), 
+        axis.title = element_text(colour = "black", size = 12))
+
+# plot with confidence intervals
+
+coeff <- 990
+PredTimeseriesCI <- ggplot()+
+  geom_ribbon(data = timeseries, aes(x = Date, ymin = ModB2.5, ymax = ModB97.5, fill = "Eq. 2"), alpha = 0.4)+
+  geom_ribbon(data = timeseries, aes(x = Date, ymin = ModA2.5, ymax = ModA97.5, fill = "Eq. 1"), alpha = 0.5)+
+  geom_point(data = timeseries, aes(x = Date, y = K40/coeff, color = "K-40", fill = "K-40"), na.rm  =TRUE)+
+  geom_line(data = timeseries, aes(x = Date, y = predB, color = "Eq. 2"))+
+  geom_line(data = timeseries, aes(x = Date, y = predA, color = "Eq. 1"))+
+  geom_errorbar(data = Sampledf, aes(x = as.Date(Sampledf$Date), ymin = DepthWtWtot-(2*DepthWtWtot_se), 
+                                         ymax = DepthWtWtot+(2*DepthWtWtot_se)), width = 3)+
+  geom_point(data = Sampledf, aes(x = as.Date(Sampledf$Date), y = DepthWtWtot, 
+                                  shape = "Sample \n with 2 \n standard \n errors"), size = 2)+
+  scale_colour_viridis_d(begin = 0, end = 0.68, option = "C")+
+  scale_fill_viridis_d(begin = 0, end = 0.68, option = "C")+
+  scale_shape_manual(values = c(17), breaks = c("Sample \n with 2 \n standard \n errors"))+
+  scale_x_date(breaks = datebreaks21, limits =c(as.Date("2021-08-01"), as.Date("2021-12-10")))+
+  scale_y_continuous(
+    name = " \u03B8_g + \u03B8_lattice + \u03B8_SOC (g/g)", 
+    sec.axis = sec_axis(~.*coeff, name = bquote("K-40 " (Bq ~kg^-1))), limits = c(0.1, 0.75), 
+    minor_breaks = seq(0.1, 0.75, 0.05))+
+  labs(color = "", shape = "")+
+  guides(fill = "none")+
+  theme_bw()+
+  theme(axis.title.x = element_blank(), axis.text.x = element_blank(),
+        axis.title.y = element_text(colour = "black", size = 12), 
+        axis.text.y = element_text(colour = "black", size = 11))
+  
+# put together with BWE and precip data
+
+TimeSeriesPlotCI <- ggarrange(PredTimeseriesCI, Veg, ncol = 1, nrow = 2, heights = c(2,1))
+
+ggsave(plot = TimeSeriesPlotCI, filename =  paste0(outDir,"\\PredictedTimeSeriesCI2021_",stamp,".tiff"), 
+       width = 6, height = 5, units = "in", dpi= 300)
+
+
+```
+
+**Figure 6.** A time series summary of the 2021 sampling period. In the upper panel are the daily K-40 data, the gravimetric sample data, and the predictions from Eq. 1 and Eq. 2. with 95% confidence intervals calculated by bootstrapping. The lower panel shows precipitation events and estimated biomass water equivalence (BWE). Vertical dashed lines are the sampling dates.
+
+## 2022 Time Series Figure
+
+```{r time series figure 2022, echo = FALSE}
+
+# set x limits to zoom in on periods with gravimetric data
+
+datebreaks22 <- seq(as.Date("2022-03-01"), as.Date("2022-11-01"), by = "6 weeks")
+
+# lower panel of time series
+
+Veg22 <- ggplot(timeseries)+
+  #add vertical lines for sample dates
+  geom_vline(xintercept = as.Date(Sampledf$Date),linetype = 2)+
+  geom_line(aes(x = Date, y = TotBWE, color = "BWE"), linewidth = 1.5)+
+  geom_col(aes(x = Date, y = Precip.mm/4, fill = "Precip"))+
+  scale_y_continuous(
+    name = "BWE (mm)", 
+    sec.axis = sec_axis(~.*4, name = "Daily Precipitation (mm)"), limits = c(0, 15), breaks = seq(0, 16, 2))+
+  scale_x_date(breaks = datebreaks22, limits =c(as.Date("2022-03-01"), as.Date("2022-11-01")), date_labels = '%d %b' )+
+  scale_color_manual(breaks = c("BWE"), values = c("palegreen4"))+
+  scale_fill_manual(breaks = c("Precip"), values = c("skyblue3"))+
+  labs(color = " ", fill = " ", x = "2022")+
+  theme(axis.text.x = element_text( size = 6))+
+  theme_bw()+
+  theme(axis.text = element_text(colour = "black", size = 11), 
+        axis.title = element_text(colour = "black", size = 12))
+
+# Plot CI for 2022
+# set x limits to zoom in on periods with gravimetric data
+
+PredTimeseriesCI22 <- ggplot()+
+  geom_ribbon(data = timeseries, aes(x = Date, ymin = ModB2.5, ymax = ModB97.5, fill = "Eq. 2"), alpha = 0.4)+
+  geom_ribbon(data = timeseries, aes(x = Date, ymin = ModA2.5, ymax = ModA97.5, fill = "Eq. 1"), alpha = 0.5)+
+  geom_point(data = timeseries, aes(x = Date, y = K40/coeff, color = "K-40", fill = "K-40"), na.rm  =TRUE)+
+  geom_line(data = timeseries, aes(x = Date, y = predB, color = "Eq. 2"))+
+  geom_line(data = timeseries, aes(x = Date, y = predA, color = "Eq. 1"))+
+  geom_errorbar(data = Sampledf, aes(x = as.Date(Sampledf$Date), ymin = DepthWtWtot-(2*DepthWtWtot_se), 
+                                         ymax = DepthWtWtot+(2*DepthWtWtot_se)), width = 3)+
+  geom_point(data = Sampledf, aes(x = as.Date(Sampledf$Date), y = DepthWtWtot, shape = "Sample \n with 2 \n standard \n errors"), size = 2)+
+  scale_colour_viridis_d(begin = 0, end = 0.68, option = "C")+
+  scale_fill_viridis_d(begin = 0, end = 0.68, option = "C")+
+  scale_shape_manual(values = c(17), breaks = c("Sample \n with 2 \n standard \n errors"))+
+  scale_x_date(breaks = datebreaks22, limits =c(as.Date("2022-03-01"), as.Date("2022-11-101")))+
+  scale_y_continuous(
+    name = " \u03B8_g + \u03B8_lattice + \u03B8_SOC (g/g)", 
+    sec.axis = sec_axis(~.*coeff, name = bquote("K-40 " (Bq ~kg^-1))), limits = c(0.1, 0.75),
+    minor_breaks = seq(0.1, 0.75, 0.05))+
+  labs(color = "", shape = "")+
+  guides(fill = "none")+
+  theme_bw()+
+  theme(axis.title.x = element_blank(), axis.text.x = element_blank(),
+        axis.title.y = element_text(colour = "black", size = 12), 
+        axis.text.y = element_text(colour = "black", size = 11))
+
+
+TimeSeriesPlot22CI <- ggarrange(PredTimeseriesCI22, Veg22, ncol = 1, nrow = 2, heights = c(2,1))
+
+ggsave(plot = TimeSeriesPlot22CI, filename =  paste0(outDir,"\\PredictedTimeSeriesCI2022_",stamp,".tiff"), width = 6, height = 5, units = "in", dpi = 300)
+
+```
+
+**Figure 7.** A time series summary of the 2022 sampling period. In the upper panel are the daily K-40 data, the gravimetric sample data, and the predictions from Eq. 1 and Eq. 2. with 95% confidence intervals calculated by bootstrapping. The lower panel shows precipitation events and estimated biomass water equivalence (BWE). Vertical dashed lines are the sampling dates.
+
+## 2023 Time Series Figure
+
+```{r 2023 time series,echo = FALSE}
+# Plot CI for 2023
+# set x limits to zoom in on periods with gravimetric data
+
+datebreaks23 <- seq(as.Date("2023-05-10"), as.Date("2023-10-30"), by = "5 weeks")
+
+PredTimeseriesCI23 <- ggplot()+
+  geom_ribbon(data = timeseries, aes(x = Date, ymin = ModB2.5, ymax = ModB97.5, fill = "Eq. 2"), alpha = 0.4)+
+  geom_ribbon(data = timeseries, aes(x = Date, ymin = ModA2.5, ymax = ModA97.5, fill = "Eq. 1"), alpha = 0.5)+
+  geom_point(data = timeseries, aes(x = Date, y = K40/coeff, color = "K-40", fill = "K-40"), na.rm  =TRUE)+
+  geom_line(data = timeseries, aes(x = Date, y = predB, color = "Eq. 2"))+
+  geom_line(data = timeseries, aes(x = Date, y = predA, color = "Eq. 1"))+
+  geom_errorbar(data = Sampledf, aes(x = as.Date(Sampledf$Date), ymin = DepthWtWtot-(2*DepthWtWtot_se), 
+                                         ymax = DepthWtWtot+(2*DepthWtWtot_se)), width = 3)+
+  geom_point(data = Sampledf, aes(x = as.Date(Sampledf$Date), y = DepthWtWtot,
+                                  shape = "Sample \n with 2 \n standard \n errors"), size = 2)+
+  scale_colour_viridis_d(begin = 0, end = 0.68, option = "C")+
+  scale_fill_viridis_d(begin = 0, end = 0.68, option = "C")+
+  scale_shape_manual(values = c(17), breaks = c("Sample \n with 2 \n standard \n errors"))+
+  scale_x_date(breaks = datebreaks23, limits =c(as.Date("2023-05-10"), as.Date("2023-10-30")))+
+  scale_y_continuous(
+    name = " \u03B8_g + \u03B8_lattice + \u03B8_SOC (g/g)", 
+    sec.axis = sec_axis(~.*coeff, name = bquote("K-40 " (Bq ~kg^-1)), breaks = seq(100,700,100)), limits = c(0.1, 0.75), minor_breaks = seq(0.1, 0.75, 0.05) )+
+  #
+  labs(color = "", shape = "")+
+  guides(fill = "none")+
+  theme_bw()+
+  theme(axis.title.x = element_blank(), axis.text.x = element_blank(), 
+        axis.title.y = element_text(colour = "black", size = 12), axis.text.y = element_text(colour = "black", size = 11))
+
+# lower panel of time series
+
+Veg23 <- ggplot(timeseries)+
+  #add vertical lines for sample dates
+  geom_vline(xintercept = as.Date(Sampledf$Date),linetype = 2)+
+  geom_line(aes(x = Date, y = TotBWE, color = "BWE"), linewidth = 1.5)+
+  geom_col(aes(x = Date, y = Precip.mm/4, fill = "Precip"))+
+  scale_y_continuous(
+    name = "BWE (mm)", 
+    sec.axis = sec_axis(~.*4, name = "Daily Precipitation (mm)"), limits = c(0, 15), breaks = seq(0, 16, 2))+
+  scale_x_date(breaks = datebreaks23, limits =c(as.Date("2023-05-10"), as.Date("2023-10-30")), date_labels = '%d %b')+
+  scale_color_manual(breaks = c("BWE"), values = c("palegreen4"))+
+  scale_fill_manual(breaks = c("Precip"), values = c("skyblue3"))+
+  labs(color = " ", fill = " ", x = "2023")+
+  theme_bw()+
+  theme(axis.text = element_text(colour = "black", size = 11), axis.title = element_text(colour = "black", size = 12))
+
+TimeSeriesPlot23CI <- ggarrange(PredTimeseriesCI23, Veg23, ncol = 1, nrow = 2, heights = c(2,1))
+
+ggsave(plot = TimeSeriesPlot23CI, filename =  paste0(outDir,"\\PredictedTimeSeriesCI2023_",stamp,".tiff"), width = 6, height = 5, units = "in", dpi = 300)
+
+```
+
+**Figure 8.** A time series summary of the 2023 sampling period. In the upper panel are the daily K-40 data, the gravimetric sample data, and the predictions from Eq. 1 and Eq. 2. with 95% confidence intervals calculated by bootstrapping. The lower panel shows precipitation events and estimated biomass water equivalence (BWE).  Vertical dashed lines are the sampling dates.
+
+## Compare Residuals for Eq. 1 and Eq. 2
+
+```{r compare residuals for different models, echo = FALSE}
+
+compareResidDF <- data.frame(K40 = Sampledf$K, Mod2Resid = abs(resid2), ModAResid = abs(residA), TotBWE = Sampledf$TotBWE)
+  
+CompareResidPlot <- ggplot()+
+  #geom_errorbar(data = Sampledf, aes(x = K40, ymin = DepthWtWtot-(2*DepthWtWtot_se), 
+                                         #ymax = DepthWtWtot+(2*DepthWtWtot_se)), width = 3)+
+  #geom_errorbarh(data = Sampledf, aes(xmin =K40-K40_uncer, 
+                                          #xmax = K40+K40_uncer,
+                                          #y = DepthWtWtot), height = 0.003)+
+  geom_point(data = compareResidDF, aes(x = K40, y = ModAResid, 
+                                      shape = "Eq. 1 ", fill = TotBWE), color = "black",size = 2)+
+  #geom_line(aes(x = Kx , y = plotcurve, color = "Model 0"))+
+  geom_point(data = compareResidDF, aes(x = K40, y = Mod2Resid, 
+                                  shape = "Eq. 2 ", fill = TotBWE), color = "black",size = 3)+
+  scale_x_continuous(labels = number_format(accuracy = 1.0), limits = c(520,700))+
+  scale_y_continuous(limits = c(0, 0.2))+
+  scale_shape_manual(breaks = c("Eq. 1 ", "Eq. 2 "), 
+                     values = c(24, 21))+
+  scale_fill_viridis_b(option = "D", begin = 0, end = 0.9,limits = range(Sampledf$TotBWE))+
+  #scale_color_manual(values = "orangered3", breaks = c("Model 0"))+
+  labs( y = "absolute value of residuals", x = bquote('K-40 ' (Bq ~kg^-1) ),
+       shape = "", fill = "BWE (mm)", color = "")+
+  theme(axis.title.x = element_text(size = 8), 
+        plot.title = element_text(size = 10), axis.title.y = element_text(size = 8), 
+        legend.key.size = unit(0.1, "in"), legend.text = element_text(size = 6))
+
+CompareResidPlot
+
+```
+
+Residuals from Eq. 1 and Eq. 2 are plotted together. 
+
+```{r compare linear trends in residuals, echo  = FALSE}
+
+# compare residuals to save
+
+Eq1and2resid <- ggarrange(KregrA, Kregr2, ncol=1, nrow = 2)
+ggsave(Eq1and2resid, filename =  paste0(outDir,"\\ResidualsFor2MainEq",stamp,".tiff"), width = 6, height = 6, units = "in", dpi = 300)
+
+```
+
+**Figure 5**  a) Residuals from Eq. 1. The red line shows the significant linear trend (slope and intercept p-values < 0.01). b) Residuals from Eq. 2, where there is not a significant trend.  
