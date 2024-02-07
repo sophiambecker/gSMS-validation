@@ -445,7 +445,8 @@ ResPlot <- ggplot()+
   geom_point(data = FinalRes, aes(x = n, y = RMSE))+
   labs(y = bquote("RMSE " (g ~g^-1)), x = "Number of Calibrations")+
   scale_x_continuous(breaks = seq(3, 28,2))+
-  scale_y_continuous(breaks = seq(0.02, 0.042, 0.002), limits = c(0.0295, 0.0392))
+  scale_y_continuous(breaks = seq(0.02, 0.042, 0.002), limits = c(0.0295, 0.0392))+
+  theme(axis.text = element_text(size = 14, color = "black"), axis.title = element_text(size = 16))
 
 ggsave(ResPlot, file = paste0(outDir, "\\RMSEvsSampleSize_", stamp, ".tiff"),width = 6, height = 6, units = "in", dpi = 300 )
 
