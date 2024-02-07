@@ -22,6 +22,6 @@ Code that applies the weights found by “DepthWeightsFunction.R” to calculate
 ### CalcArithmeticAverage.R
 Code that calculated arithmetic averaged as opposed to depth weighted average for comparison purposes.  
 ### EffectOfNumberSamplesInFootprint.R
-Used to create Figure 9 in the paper. Creates the output folder, "NumberSampLocOutput". 
+Used to create figure showing the relative error vs number of profiles collected within the footprint for a single calibration. Creates the output folder, "NumberSampLocOutput". 
 ### NumCalNeeded.R 
-Used to create Figure 10 in the paper.
+Used to create figure showing the RMSE vs number of calibration.
