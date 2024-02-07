@@ -1072,7 +1072,7 @@ ggsave(plot = TimeSeriesPlotCI, filename =  paste0(outDir,"\\PredictedTimeSeries
 
 ```
 
-**Figure 6.** A time series summary of the 2021 sampling period. In the upper panel are the daily K-40 data, the gravimetric sample data, and the predictions from Eq. 1 and Eq. 2. with 95% confidence intervals calculated by bootstrapping. The lower panel shows precipitation events and estimated biomass water equivalence (BWE). Vertical dashed lines are the sampling dates.
+**Figure 6a.** A time series summary of the 2021 sampling period. In the upper panel are the daily K-40 data, the gravimetric sample data, and the predictions from Eq. 1 and Eq. 2. with 95% confidence intervals calculated by bootstrapping. The lower panel shows precipitation events and estimated biomass water equivalence (BWE). Vertical dashed lines are the sampling dates.
 
 ## 2022 Time Series Figure
 
@@ -1135,7 +1135,7 @@ ggsave(plot = TimeSeriesPlot22CI, filename =  paste0(outDir,"\\PredictedTimeSeri
 
 ```
 
-**Figure 7.** A time series summary of the 2022 sampling period. In the upper panel are the daily K-40 data, the gravimetric sample data, and the predictions from Eq. 1 and Eq. 2. with 95% confidence intervals calculated by bootstrapping. The lower panel shows precipitation events and estimated biomass water equivalence (BWE). Vertical dashed lines are the sampling dates.
+**Figure 6b.** A time series summary of the 2022 sampling period. In the upper panel are the daily K-40 data, the gravimetric sample data, and the predictions from Eq. 1 and Eq. 2. with 95% confidence intervals calculated by bootstrapping. The lower panel shows precipitation events and estimated biomass water equivalence (BWE). Vertical dashed lines are the sampling dates.
 
 ## 2023 Time Series Figure
 
@@ -1192,7 +1192,7 @@ ggsave(plot = TimeSeriesPlot23CI, filename =  paste0(outDir,"\\PredictedTimeSeri
 
 ```
 
-**Figure 8.** A time series summary of the 2023 sampling period. In the upper panel are the daily K-40 data, the gravimetric sample data, and the predictions from Eq. 1 and Eq. 2. with 95% confidence intervals calculated by bootstrapping. The lower panel shows precipitation events and estimated biomass water equivalence (BWE).  Vertical dashed lines are the sampling dates.
+**Figure 6c.** A time series summary of the 2023 sampling period. In the upper panel are the daily K-40 data, the gravimetric sample data, and the predictions from Eq. 1 and Eq. 2. with 95% confidence intervals calculated by bootstrapping. The lower panel shows precipitation events and estimated biomass water equivalence (BWE).  Vertical dashed lines are the sampling dates.
 
 ## Compare Residuals for Eq. 1 and Eq. 2
 
