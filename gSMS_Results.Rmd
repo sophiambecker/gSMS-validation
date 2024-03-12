@@ -404,7 +404,7 @@ GravimetricDataPlotCI <- ggplot()+
   scale_fill_viridis_b(option = "D", begin = 0, end = 0.9,limits = range(Sampledf$TotBWE))+
   scale_color_manual(values = c("black", "gray1"), breaks = c("Base model fitting \n only I_0 with \n 95% CI", "95% CI"))+
   labs( y = expression(theta[g]~+~theta[lattice]~+~theta[SOC]~(g~g^-1)), 
-        x = bquote('K-40 ' (Bq ~kg^-1)),
+        x = bquote(' Specific Activity of K-40 ' (Bq ~kg^-1)),
        shape = "", fill = "BWE (mm)", color = "")+
   theme(axis.title.x = element_text(size = 6), 
         plot.title = element_text(size = 10), axis.title.y = element_text(size = 8), 
@@ -417,7 +417,7 @@ ggsave(GravimetricDataPlotCI, filename = paste0(outDir, "\\GravimetricDataPlotCI
 
 ```
 
-**Figure 4.** The experimental relationship between total water and K-40 compared to the relationship predicted by Eq. 0 (black line) and the corresponding 95% confidence interval.
+**Figure 5.** The experimental relationship between total water and K-40 specific activity compared to the relationship predicted by Eq. 0 (black line) and the corresponding 95% confidence interval.
 
 ## Next, Evaluate Calibration Equation 1
 
@@ -1052,7 +1052,7 @@ PredTimeseriesCI <- ggplot()+
   scale_shape_manual(values = c(17), breaks = c("Sample \n with 2 \n standard \n errors"))+
   scale_x_date(breaks = datebreaks21, limits =c(as.Date("2021-08-01"), as.Date("2021-12-10")))+
   scale_y_continuous(
-    name = " \u03B8_g + \u03B8_lattice + \u03B8_SOC (g/g)", 
+    name = expression(theta[g]~+~theta[lattice]~+~theta[SOC]~(g~g^-1)), 
     sec.axis = sec_axis(~.*coeff, name = bquote("K-40 " (Bq ~kg^-1))), limits = c(0.1, 0.75), 
     minor_breaks = seq(0.1, 0.75, 0.05))+
   labs(color = "", shape = "")+
@@ -1072,7 +1072,7 @@ ggsave(plot = TimeSeriesPlotCI, filename =  paste0(outDir,"\\PredictedTimeSeries
 
 ```
 
-**Figure 6a.** A time series summary of the 2021 sampling period. In the upper panel are the daily K-40 data, the gravimetric sample data, and the predictions from Eq. 1 and Eq. 2. with 95% confidence intervals calculated by bootstrapping. The lower panel shows precipitation events and estimated biomass water equivalence (BWE). Vertical dashed lines are the sampling dates.
+**Figure 7a.** A time series summary of the 2021 sampling period. In the upper panel are the daily K-40 data, the gravimetric sample data, and the predictions from Eq. 1 and Eq. 2. with 95% confidence intervals calculated by bootstrapping. The lower panel shows precipitation events and estimated biomass water equivalence (BWE). Vertical dashed lines are the sampling dates.
 
 ## 2022 Time Series Figure
 
@@ -1118,7 +1118,7 @@ PredTimeseriesCI22 <- ggplot()+
   scale_shape_manual(values = c(17), breaks = c("Sample \n with 2 \n standard \n errors"))+
   scale_x_date(breaks = datebreaks22, limits =c(as.Date("2022-03-01"), as.Date("2022-11-101")))+
   scale_y_continuous(
-    name = " \u03B8_g + \u03B8_lattice + \u03B8_SOC (g/g)", 
+    name = expression(theta[g]~+~theta[lattice]~+~theta[SOC]~(g~g^-1)), 
     sec.axis = sec_axis(~.*coeff, name = bquote("K-40 " (Bq ~kg^-1))), limits = c(0.1, 0.75),
     minor_breaks = seq(0.1, 0.75, 0.05))+
   labs(color = "", shape = "")+
@@ -1135,7 +1135,7 @@ ggsave(plot = TimeSeriesPlot22CI, filename =  paste0(outDir,"\\PredictedTimeSeri
 
 ```
 
-**Figure 6b.** A time series summary of the 2022 sampling period. In the upper panel are the daily K-40 data, the gravimetric sample data, and the predictions from Eq. 1 and Eq. 2. with 95% confidence intervals calculated by bootstrapping. The lower panel shows precipitation events and estimated biomass water equivalence (BWE). Vertical dashed lines are the sampling dates.
+**Figure 7b.** A time series summary of the 2022 sampling period. In the upper panel are the daily K-40 data, the gravimetric sample data, and the predictions from Eq. 1 and Eq. 2. with 95% confidence intervals calculated by bootstrapping. The lower panel shows precipitation events and estimated biomass water equivalence (BWE). Vertical dashed lines are the sampling dates.
 
 ## 2023 Time Series Figure
 
@@ -1160,7 +1160,7 @@ PredTimeseriesCI23 <- ggplot()+
   scale_shape_manual(values = c(17), breaks = c("Sample \n with 2 \n standard \n errors"))+
   scale_x_date(breaks = datebreaks23, limits =c(as.Date("2023-05-10"), as.Date("2023-10-30")))+
   scale_y_continuous(
-    name = " \u03B8_g + \u03B8_lattice + \u03B8_SOC (g/g)", 
+    name = expression(theta[g]~+~theta[lattice]~+~theta[SOC]~(g~g^-1)), 
     sec.axis = sec_axis(~.*coeff, name = bquote("K-40 " (Bq ~kg^-1)), breaks = seq(100,700,100)), limits = c(0.1, 0.75), minor_breaks = seq(0.1, 0.75, 0.05) )+
   #
   labs(color = "", shape = "")+
@@ -1192,7 +1192,7 @@ ggsave(plot = TimeSeriesPlot23CI, filename =  paste0(outDir,"\\PredictedTimeSeri
 
 ```
 
-**Figure 6c.** A time series summary of the 2023 sampling period. In the upper panel are the daily K-40 data, the gravimetric sample data, and the predictions from Eq. 1 and Eq. 2. with 95% confidence intervals calculated by bootstrapping. The lower panel shows precipitation events and estimated biomass water equivalence (BWE).  Vertical dashed lines are the sampling dates.
+**Figure 7c.** A time series summary of the 2023 sampling period. In the upper panel are the daily K-40 data, the gravimetric sample data, and the predictions from Eq. 1 and Eq. 2. with 95% confidence intervals calculated by bootstrapping. The lower panel shows precipitation events and estimated biomass water equivalence (BWE).  Vertical dashed lines are the sampling dates.
 
 ## Compare Residuals for Eq. 1 and Eq. 2
 
@@ -1238,4 +1238,4 @@ ggsave(Eq1and2resid, filename =  paste0(outDir,"\\ResidualsFor2MainEq",stamp,".t
 
 ```
 
-**Figure 5**  a) Residuals from Eq. 1. The red line shows the significant linear trend (slope and intercept p-values < 0.01). b) Residuals from Eq. 2, where there is not a significant trend.  
+**Figure 6**  a) Residuals from Eq. 1. The red line shows the significant linear trend (slope and intercept p-values < 0.01). b) Residuals from Eq. 2, where there is not a significant trend.  
